@@ -52,6 +52,7 @@ class EDD_Payflexi_Gateway {
 		add_filter( 'edd_settings_gateways', array( $this, 'edd_payflexi_settings' ) );
         add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), array ( $this, 'edd_payflexi_plugin_action_links' ));
         add_filter( 'edd_payment_statuses', array( $this, 'add_new_edd_payment_status' ));
+        add_filter( 'edd_payments_table_bulk_actions', array( $this, 'payflexi_edd_bulk_status_dropdown' ) );
 	}
 
     /**
@@ -559,6 +560,26 @@ class EDD_Payflexi_Gateway {
         $payment_statuses['partial']   = 'Partially Paid';
     
         return $payment_statuses;   
+    }
+
+    /**
+    * Adds bulk actions to the bulk action dropdown on "Payment History" screen
+    */
+    public function payflexi_edd_bulk_status_dropdown( $actions ) {
+
+        $new_bulk_status_actions = array();
+        
+        // Loop through existing bulk actions
+        foreach ( $actions as $key => $action ) {
+        
+        $new_bulk_status_actions[ $key ] = $action;
+            // Add our actions after the "Set To Cancelled" action
+            if ( 'set-status-cancelled' === $key ) {
+                $new_bulk_status_actions['set-status-partial']         = 'Set To Partially Paid';
+            }
+        }
+        
+        return $new_bulk_status_actions;
     }
 
 }
