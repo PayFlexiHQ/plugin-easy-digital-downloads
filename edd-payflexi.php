@@ -523,13 +523,17 @@ class EDD_Payflexi_Gateway {
             <?php
         }
     }
-
-
+    
+	/**
+	 * Register the gateway icon
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
     public function payment_icon( $icons ) {
-        $icons[ EDD_PAYFLEXI_URL . 'assets/images/payflexi.png' ] = 'PayFlexi';
+        $icons[ EDD_PAYFLEXI_URL . 'assets/images/payflexi-wc.png' ] = 'PayFlexi';
         return $icons;
     }
-
 
 
     public function edd_payflexi_plugin_action_links( $links ) {
