@@ -213,6 +213,7 @@ class EDD_Payflexi_Gateway {
         $callback_url = add_query_arg( 'edd-listener', 'payflexi', home_url( 'index.php' ) );
 
         $body = array(
+            'name'         => $payflexi_data['name'],
             'amount'       => $payflexi_data['amount'],
             'email'        => $payflexi_data['email'],
             'reference'    => $payflexi_data['reference'],
@@ -220,7 +221,7 @@ class EDD_Payflexi_Gateway {
             'callback_url' => $callback_url,
             'domain'       => 'global',
             'meta' => [
-                'title' => 'Test Payment',
+                'title' => $payflexi_data['products'],
             ]
         );
 
@@ -262,8 +263,6 @@ class EDD_Payflexi_Gateway {
             'gateway'      => 'payflexi',
         );
 
-        ray(['EDD Payment Data' => $payment_data]);
-
         $payment = edd_insert_payment( $payment_data );
 
         if ( ! $payment ) {
@@ -271,12 +270,25 @@ class EDD_Payflexi_Gateway {
             edd_send_back_to_checkout( '?payment-mode=payflexi' );
 
         } else {
+            
+            $products = '';
+            
+            foreach( $purchase_data['cart_details'] as $item_id => $item ) {
+                $name  = $item['name'];
+                $quantity = $item['quantity'];
+                $products .= $name . ' (Qty: ' . $quantity . ')';
+                $products .= ' | ';
+            }
+
+            $products = rtrim( $products, ' | ' );
 
             $payflexi_data = array();
 
+            $payflexi_data['name']      = $purchase_data['user_info']['first_name'] ? $purchase_data['user_info']['first_name'] : '';
             $payflexi_data['amount']    = $purchase_data['price'];
             $payflexi_data['email']     = $purchase_data['user_email'];
             $payflexi_data['reference'] = 'EDD-' . $payment . '-' . uniqid();
+            $payflexi_data['product']   = $products;
 
             edd_set_payment_transaction_id( $payment, $payflexi_data['reference'] );
 
@@ -302,8 +314,17 @@ class EDD_Payflexi_Gateway {
 	 * @return void
 	 */
     public function edd_payflexi_redirect() {
+        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' && isset($_GET['pf_cancelled']) ) {
+            edd_set_error( 'payflexi_payment_cancelled', __( 'The Transaction was cancelled by the customer', 'payflexi' ) );
+            edd_send_back_to_checkout( '?payment-mode=payflexi' );
+        }
 
-        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' ) {
+        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' && isset($_GET['pf_declined']) ) {
+            edd_set_error( 'payflexi_payment_declined', __( 'The Transaction was declined by the payment gateway', 'payflexi' ) );
+            edd_send_back_to_checkout( '?payment-mode=payflexi' );
+        }
+
+        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' && isset($_GET['pf_approved']) ) {
             do_action( 'payflexi_redirect_verify' );
         }
 
@@ -312,30 +333,32 @@ class EDD_Payflexi_Gateway {
         }
     }
 
-
-
+    /**
+	 * Process approved transaction redirect from PayFlexi
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
     public function payflexi_redirect_verify() {
 
-        if ( isset( $_REQUEST['trxref'] ) ) {
+        if ( isset( $_REQUEST['reference'] ) ) {
 
-            $transaction_id = $_REQUEST['trxref'];
+            $transaction_id = $_REQUEST['reference'];
 
             $the_payment_id = edd_get_purchase_id_by_transaction_id( $transaction_id );
 
             if ( $the_payment_id && get_post_status( $the_payment_id ) == 'publish' ) {
-
                 edd_empty_cart();
-
                 edd_send_to_success_page();
             }
 
-            $paystack_txn = $this->payflexi_verify_transaction( $transaction_id );
+            $payflexi_transaction = $this->payflexi_verify_transaction($transaction_id);
 
             $order_info = explode( '-', $transaction_id );
 
             $payment_id = $order_info[1];
 
-            if ( $payment_id && ! empty( $paystack_txn->data ) && ( $paystack_txn->data->status === 'success' ) ) {
+            if ( $payment_id && !$payflexi_transaction->errors && ! empty( $payflexi_transaction->data )) {
 
                 $payment = new EDD_Payment( $payment_id );
 
@@ -343,9 +366,11 @@ class EDD_Payflexi_Gateway {
 
                 $currency_symbol = edd_currency_symbol( $payment->currency );
 
-                $amount_paid = $paystack_txn->data->amount / 100;
+                $order_amount = $payflexi_transaction->data->amount ? $payflexi_transaction->data->amount : 0;
 
-                $paystack_txn_ref = $paystack_txn->data->reference;
+                $amount_paid = $payflexi_transaction->data->txn_amount ? $payflexi_transaction->data->txn_amount : 0;
+
+                $payflexi_txn_ref = $payflexi_transaction->data->reference;
 
                 if ( $amount_paid < $order_total ) {
 
@@ -383,7 +408,43 @@ class EDD_Payflexi_Gateway {
 
             }
         }
+    }
+    
+    /**
+	 * Verify approved transaction from PayFlexi API
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+    public function payflexi_verify_transaction($payment_reference) {
 
+        $payflexi_url = 'https://api.payflexi.test/merchants/transactions/' . $payment_reference;
+
+        if ( edd_get_option( 'edd_payflexi_test_mode' ) ) {
+            $secret_key = trim( edd_get_option( 'edd_payflexi_test_secret_key' ) );
+        } else {
+            $secret_key = trim( edd_get_option( 'edd_payflexi_live_secret_key' ) );
+        }
+
+        $headers = array(
+            'Authorization' => 'Bearer ' . $secret_key,
+        );
+
+        $args = array(
+            'sslverify' => false, //Set to true on production
+            'headers' => $headers,
+            'timeout' => 60,
+        );
+
+        $request = wp_remote_get( $payflexi_url, $args );
+
+        if ( ! is_wp_error( $request ) && 200 === wp_remote_retrieve_response_code( $request ) ) {
+            $payflexi_response = json_decode( wp_remote_retrieve_body( $request ) );
+        } else {
+            $payflexi_response = json_decode( wp_remote_retrieve_body( $request ) );
+
+        }
+        return $payflexi_response;
     }
 
     public function payflexi_process_webhook() {
@@ -474,46 +535,6 @@ class EDD_Payflexi_Gateway {
     }
 
 
-    public function payflexi_verify_transaction( $payment_token ) {
-
-        $paystack_url = 'https://api.paystack.co/transaction/verify/' . $payment_token;
-
-        if ( edd_get_option( 'edd_paystack_test_mode' ) ) {
-
-            $secret_key = trim( edd_get_option( 'edd_paystack_test_secret_key' ) );
-
-        } else {
-
-            $secret_key = trim( edd_get_option( 'edd_paystack_live_secret_key' ) );
-
-        }
-
-        $headers = array(
-            'Authorization' => 'Bearer ' . $secret_key,
-        );
-
-        $args = array(
-            'headers' => $headers,
-            'timeout' => 60,
-        );
-
-        $request = wp_remote_get( $paystack_url, $args );
-
-        if ( ! is_wp_error( $request ) && 200 === wp_remote_retrieve_response_code( $request ) ) {
-
-            $paystack_response = json_decode( wp_remote_retrieve_body( $request ) );
-
-        } else {
-
-            $paystack_response = json_decode( wp_remote_retrieve_body( $request ) );
-
-        }
-
-        return $paystack_response;
-
-    }
-
-
     public function edd_payflexi_testmode_notice() {
         if ( edd_get_option( 'edd_payflexi_test_mode' ) ) {
             ?>
@@ -523,7 +544,7 @@ class EDD_Payflexi_Gateway {
             <?php
         }
     }
-    
+
 	/**
 	 * Register the gateway icon
 	 *
