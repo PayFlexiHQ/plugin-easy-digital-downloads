@@ -51,6 +51,7 @@ class EDD_Payflexi_Gateway {
 		add_filter( 'edd_settings_sections_gateways', array( $this, 'edd_payflexi_settings_section' ), 10, 1 );
 		add_filter( 'edd_settings_gateways', array( $this, 'edd_payflexi_settings' ) );
         add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), array ( $this, 'edd_payflexi_plugin_action_links' ));
+        add_filter( 'edd_payment_statuses', array( $this, 'add_new_edd_payment_status' ));
 	}
 
     /**
@@ -373,39 +374,22 @@ class EDD_Payflexi_Gateway {
                 $payflexi_txn_ref = $payflexi_transaction->data->reference;
 
                 if ( $amount_paid < $order_total ) {
-
-                    $note = 'Look into this purchase. This order is currently revoked. Reason: Amount paid is less than the total order amount. Amount Paid was ' . $currency_symbol . $amount_paid . ' while the total order amount is ' . $currency_symbol . $order_total . '. Paystack Transaction Reference: ' . $paystack_txn_ref;
-
-                    $payment->status = 'revoked';
-
+                    $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
+                    $payment->status = 'partial';
                     $payment->add_note( $note );
-
-                    $payment->transaction_id = $paystack_txn_ref;
-
+                    $payment->transaction_id = $payflexi_txn_ref;
                 } else {
-
-                    $note = 'Payment transaction was successful. Paystack Transaction Reference: ' . $paystack_txn_ref;
-
+                    $note = 'Payment transaction was successful. PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
                     $payment->status = 'publish';
-
                     $payment->add_note( $note );
-
-                    $payment->transaction_id = $paystack_txn_ref;
-
+                    $payment->transaction_id = $payflexi_txn_ref;
                 }
-
                 $payment->save();
-
                 edd_empty_cart();
-
                 edd_send_to_success_page();
-
             } else {
-
                 edd_set_error( 'failed_payment', 'Payment failed. Please try again.' );
-
-                edd_send_back_to_checkout( '?payment-mode=paystack' );
-
+                edd_send_back_to_checkout( '?payment-mode=payflexi' );
             }
         }
     }
@@ -562,6 +546,19 @@ class EDD_Payflexi_Gateway {
             'settings' => '<a href="' . admin_url( 'edit.php?post_type=download&page=edd-settings&tab=gateways&section=payflexi-settings' ) . '" title="Settings">Settings</a>',
         );
         return array_merge( $settings_link, $links );
+    }
+
+    /**
+	 * Register a new payment status
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
+    public function add_new_edd_payment_status( $payment_statuses ) {
+    
+        $payment_statuses['partial']   = 'Partially Paid';
+    
+        return $payment_statuses;   
     }
 
 }
