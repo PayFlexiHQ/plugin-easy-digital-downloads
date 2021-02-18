@@ -672,12 +672,15 @@ class EDD_Payflexi_Gateway {
         ));
  
     }
+    
     /**
     * Adds our new payment statuses to the Payment History navigation
     */
     public function payflexi_edd_payments_new_views( $views ) {
-    
-        $views['partial_payment']  = sprintf('', add_query_arg( array( 'status' => 'partial_payment', 'paged' => FALSE ) ), 'Partially paid' );
+        $payment_count        = wp_count_posts('edd_payment');
+	    $partial_payment_count    = '&nbsp;<span class="count">(' . $payment_count->partial_payment . ')</span>';
+        $current              = isset( $_GET['status'] ) ? $_GET['status'] : '';
+        $views['partial_payment'] = sprintf( '<a href="%s"%s>%s</a>', esc_url( add_query_arg( 'status', 'partial_payment', admin_url( 'edit.php?post_type=download&page=edd-payment-history' ) ) ), $current === 'partial_payment' ? ' class="current"' : '', __( 'Parially Paid', 'edd-payflexi' ) . $partial_payment_count );
     
         return $views;
     }
