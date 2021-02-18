@@ -56,9 +56,11 @@ class EDD_Payflexi_Gateway {
         add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), array ( $this, 'edd_payflexi_plugin_action_links' ));
         add_filter( 'edd_payment_statuses', array( $this, 'add_new_edd_payment_status' ));
         add_filter( 'edd_payments_table_bulk_actions', array( $this, 'payflexi_edd_bulk_status_dropdown' ) );
-        add_filter( 'edd_get_earnings_by_date_args', array( $this, 'payflexi_edd_earnings_reporting_args' ) );
-        add_filter( 'edd_get_sales_by_date_args', array( $this, 'payflexi_edd_sales_reporting_args' ) );
         add_filter( 'edd_payments_table_views', array( $this, 'payflexi_edd_payments_new_views' ));
+        add_filter( 'edd_get_total_earnings_args', array( $this, 'earnings_query' ) );
+		add_filter( 'edd_get_earnings_by_date_args', array( $this, 'earnings_query' ) );
+		add_filter( 'edd_get_sales_by_date_args', array( $this, 'earnings_query' ) );
+		add_filter( 'edd_stats_earnings_args', array( $this, 'earnings_query' ) );
 	}
 
     /**
@@ -383,7 +385,7 @@ class EDD_Payflexi_Gateway {
 
                 $payflexi_txn_ref = $payflexi_transaction->data->reference;
 
-                if ( $amount_paid < $order_total ) {
+                if ( $amount_paid < $order_amount ) {
                     add_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
                     update_post_meta( $payment_id, '_edd_payflexi_order_amount', $order_amount);
                     update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $amount_paid);
@@ -473,8 +475,6 @@ class EDD_Payflexi_Gateway {
 
         $event = json_decode( $body );
 
-        ray(['Webhook Event' => $event]);
-
         if ('transaction.approved' == $event->event && 'approved' == $event->data->status) {
 
             http_response_code( 200 );
@@ -483,8 +483,6 @@ class EDD_Payflexi_Gateway {
 			$initial_reference = $event->data->initial_reference;
 
             $the_payment_id = edd_get_purchase_id_by_transaction_id( $initial_reference);
-
-            ray(['payment_id' => $the_payment_id]);
 
             if ( $the_payment_id && get_post_status( $the_payment_id ) == 'publish' ) {
                 exit;
@@ -498,15 +496,12 @@ class EDD_Payflexi_Gateway {
 
             $payment = new EDD_Payment( $payment_id );
 
-            ray(['EDD Payment' => $payment]);
 
             $order_total = edd_get_payment_amount( $payment_id );
 
             $currency_symbol = edd_currency_symbol( $payment->currency );
 
             $order_amount = get_post_meta($payment_id, '_edd_payflexi_order_amount', true);
-
-            ray(['Order Amount' => $order_amount]);
 
             $order_amount  = $order_amount ? $order_amount : $event->data->amount;
 
@@ -631,7 +626,7 @@ class EDD_Payflexi_Gateway {
     * Adds bulk actions to update orders when performed
     */
     public function payflexi_edd_bulk_status_action( $id, $action ) {
-        ray($id);
+ 
         if ('set-status-partial-payment' === $action ) {
             edd_update_payment_status( $id, 'partial_payment' );
         }
@@ -641,19 +636,17 @@ class EDD_Payflexi_Gateway {
     /**
     * Adds our custom statuses to earnings and sales reports
     */
-    public function payflexi_edd_earnings_reporting_args( $args ) {
+    public function earnings_query( $args ) {
 
-        $args['post_status'] = array_merge( $args['post_status'], array('partial_payment') );
-    
-        return $args;
-    }
+        $statuses_to_include = array( 'publish', 'revoked', 'partial_payment');
 
-    
-    public function payflexi_edd_sales_reporting_args( $args ) {
-    
-        $args['post_status'] = array_merge($args['post_status'], array('partial_payment') );
-    
-        return $args;
+		// Include post_status in case we are filtering to direct database queries like in the edd_stats_earnings_args filter
+		$args['post_status'] = $statuses_to_include;
+
+		// Include status in case we are filtering to queries done through edd_get_payments like in the edd_get_total_earnings_args filter
+		$args['status'] = $statuses_to_include;
+
+		return $args;
     }
 
     /**
@@ -672,7 +665,7 @@ class EDD_Payflexi_Gateway {
         ));
  
     }
-    
+
     /**
     * Adds our new payment statuses to the Payment History navigation
     */
