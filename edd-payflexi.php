@@ -306,8 +306,6 @@ class EDD_Payflexi_Gateway {
             edd_set_payment_transaction_id( $payment, $payflexi_data['reference'] );
 
             $get_payment_response = $this->payflexi_edd_get_payment_link( $payflexi_data );
-            
-            ray($get_payment_response);
 
             if (!$get_payment_response->errors) {
                 wp_redirect($get_payment_response->checkout_url);
@@ -356,20 +354,18 @@ class EDD_Payflexi_Gateway {
 
         if ( isset( $_REQUEST['reference'] ) ) {
 
-            $transaction_id = $_GET['reference'];
+            $payment_reference = $_GET['reference'];
 
-            $the_payment_id = edd_get_purchase_id_by_transaction_id( $transaction_id );
+            $the_payment_id = edd_get_purchase_id_by_transaction_id( $payment_reference );
 
             if ( $the_payment_id && get_post_status( $the_payment_id ) == 'publish' ) {
                 edd_empty_cart();
                 edd_send_to_success_page();
             }
 
-            $payflexi_transaction = $this->payflexi_verify_transaction($transaction_id);
+            $payflexi_transaction = $this->payflexi_verify_transaction($payment_reference);
 
-            $order_info = explode( '-', $transaction_id );
-
-            ray(['Order Info' => $order_info]);
+            $order_info = explode( '-', $payment_reference );
 
             $payment_id = $order_info[1];
 
@@ -389,9 +385,11 @@ class EDD_Payflexi_Gateway {
 
                 if ( $amount_paid < $order_total ) {
                     add_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
+                    update_post_meta( $payment_id, '_edd_payflexi_order_amount', $order_amount);
                     update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $amount_paid);
                     $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
                     $payment->status = 'partial_payment';
+                    $payment->total = $amount_paid;
                     $payment->add_note( $note );
                     $payment->transaction_id = $payflexi_txn_ref;
                 } else {
@@ -444,6 +442,7 @@ class EDD_Payflexi_Gateway {
             $payflexi_response = json_decode( wp_remote_retrieve_body( $request ) );
 
         }
+
         return $payflexi_response;
     }
 
@@ -495,43 +494,49 @@ class EDD_Payflexi_Gateway {
 
             $saved_txn_ref = edd_get_payment_transaction_id( $payment_id );
 
-            if ( $initial_reference != $saved_txn_ref ) {
-                exit;
-            }
-
             $payment = new EDD_Payment( $payment_id );
+
+            ray(['EDD Payment' => $payment]);
 
             $order_total = edd_get_payment_amount( $payment_id );
 
             $currency_symbol = edd_currency_symbol( $payment->currency );
 
+            $order_amount = get_post_meta($payment_id, '_edd_payflexi_order_amount', true);
+
+            $order_amount  = $order_amount ? $order_amount : $event->data->amount;
+
             $amount_paid  = $event->data->txn_amount ? $event->data->txn_amount : 0;
 
             $payflexi_txn_ref = $event->data->reference;
 
-            if ( $amount_paid < $order_total ) {
-                if($reference === $initial_reference){
-                    update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
+            if ( $amount_paid < $order_amount ) {
+                if($reference === $initial_reference && empty($saved_txn_ref)){
+                    update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $initial_reference, true );
+                    update_post_meta( $payment_id, '_edd_payflexi_order_amount', $order_amount);
                     update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $amount_paid);
                     $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
                     $payment->status = 'partial_payment';
+                    $payment->total = $amount_paid;
                     $payment->add_note( $note );
                     $payment->transaction_id = $payflexi_txn_ref;
                 }
                 if($reference !== $initial_reference){
                     $installment_amount_paid = get_post_meta($payment_id, '_edd_payflexi_installment_amount_paid', true);
                     $total_installment_amount_paid = $installment_amount_paid + $amount_paid;
-                    update_post_meta($payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid, '', 'donation');
-                    if($total_installment_amount_paid >= $order_total){
+                    if($total_installment_amount_paid >= $order_amount){
+                        update_post_meta($payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid);
                         $note = 'Payment transaction was successful. Payflexi Transaction Reference: ' . $payflexi_txn_ref;
                         $payment->status = 'publish';
+                        $payment->total = $order_amount;
                         $payment->add_note( $note );
                         $payment->transaction_id = $payflexi_txn_ref;
                     }else{
-                        update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
+                        update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref);
                         update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid);
                         $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
                         $payment->status = 'partial_payment';
+                        $payment->total = $total_installment_amount_paid;
                         $payment->add_note( $note );
                         $payment->transaction_id = $payflexi_txn_ref;
                     }
