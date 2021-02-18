@@ -39,12 +39,15 @@ class EDD_Payflexi_Gateway {
 
 		add_action( 'edd_payflexi_cc_form', '__return_false' );
 		add_action( 'edd_gateway_payflexi', array( $this, 'process_payment' ) );
-        add_action( 'init', array( $this, 'edd_payflexi_redirect') );
+        add_action( 'init', array( $this, 'edd_payflexi_redirect'), 20);
+        add_action( 'init', array( $this, 'payflexi_register_post_type_statuses' ), 10);
 		add_action( 'edd_after_cc_fields', array( $this, 'edd_payflexi_add_errors' ), 999 );
         add_action( 'edd_pre_process_purchase', array($this, 'edd_payflexi_check_config'), 1);
         add_action( 'payflexi_redirect_verify', array( $this, 'payflexi_redirect_verify' ));
         add_action( 'payflexi_process_webhook', array( $this, 'payflexi_process_webhook' ) );
         add_action( 'admin_notices', array( $this, 'edd_payflexi_testmode_notice' ));
+        add_action( 'edd_payments_table_do_bulk_action', array($this, 'payflexi_edd_bulk_status_action'), 10, 2 );
+    
 
 		add_filter( 'edd_payment_gateways', array( $this, 'register_payflexi_gateway' ) );
 		add_filter( 'edd_accepted_payment_icons', array( $this, 'payment_icon' ) );
@@ -53,6 +56,9 @@ class EDD_Payflexi_Gateway {
         add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), array ( $this, 'edd_payflexi_plugin_action_links' ));
         add_filter( 'edd_payment_statuses', array( $this, 'add_new_edd_payment_status' ));
         add_filter( 'edd_payments_table_bulk_actions', array( $this, 'payflexi_edd_bulk_status_dropdown' ) );
+        add_filter( 'edd_get_earnings_by_date_args', array( $this, 'payflexi_edd_earnings_reporting_args' ) );
+        add_filter( 'edd_get_sales_by_date_args', array( $this, 'payflexi_edd_sales_reporting_args' ) );
+        add_filter( 'edd_payments_table_views', array( $this, 'payflexi_edd_payments_new_views' ));
 	}
 
     /**
@@ -212,7 +218,12 @@ class EDD_Payflexi_Gateway {
             'Accept' =>  'application/json'
         );
 
-        $callback_url = add_query_arg( 'edd-listener', 'payflexi', home_url( 'index.php' ) );
+        $callback_url = home_url() . '?' . http_build_query(
+            [
+                'edd-listener' => 'payflexi',
+                'reference' => $payflexi_data['reference'],
+            ]
+        );
 
         $body = array(
             'name'         => $payflexi_data['name'],
@@ -290,7 +301,7 @@ class EDD_Payflexi_Gateway {
             $payflexi_data['amount']    = $purchase_data['price'];
             $payflexi_data['email']     = $purchase_data['user_email'];
             $payflexi_data['reference'] = 'EDD-' . $payment . '-' . uniqid();
-            $payflexi_data['product']   = $products;
+            $payflexi_data['products']   = $products;
 
             edd_set_payment_transaction_id( $payment, $payflexi_data['reference'] );
 
@@ -345,7 +356,7 @@ class EDD_Payflexi_Gateway {
 
         if ( isset( $_REQUEST['reference'] ) ) {
 
-            $transaction_id = $_REQUEST['reference'];
+            $transaction_id = $_GET['reference'];
 
             $the_payment_id = edd_get_purchase_id_by_transaction_id( $transaction_id );
 
@@ -357,6 +368,8 @@ class EDD_Payflexi_Gateway {
             $payflexi_transaction = $this->payflexi_verify_transaction($transaction_id);
 
             $order_info = explode( '-', $transaction_id );
+
+            ray(['Order Info' => $order_info]);
 
             $payment_id = $order_info[1];
 
@@ -375,8 +388,10 @@ class EDD_Payflexi_Gateway {
                 $payflexi_txn_ref = $payflexi_transaction->data->reference;
 
                 if ( $amount_paid < $order_total ) {
+                    add_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
+                    update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $amount_paid);
                     $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
-                    $payment->status = 'partial';
+                    $payment->status = 'partial_payment';
                     $payment->add_note( $note );
                     $payment->transaction_id = $payflexi_txn_ref;
                 } else {
@@ -432,50 +447,55 @@ class EDD_Payflexi_Gateway {
         return $payflexi_response;
     }
 
+    /**
+	 * Process webhook event
+	 *
+	 * @since 1.0.0
+	 * @return array
+	 */
     public function payflexi_process_webhook() {
 
-        if ( ( strtoupper( $_SERVER['REQUEST_METHOD'] ) != 'POST' ) || ! array_key_exists( 'HTTP_X_PAYSTACK_SIGNATURE', $_SERVER ) ) {
+        if ((strtoupper($_SERVER['REQUEST_METHOD']) != 'POST') || ! array_key_exists('HTTP_X_PAYFLEXI_SIGNATURE', $_SERVER)) {
             exit;
         }
 
-        $json = file_get_contents( 'php://input' );
+        //Retrieve the request's body and parse it as JSON.
+		$body  = @file_get_contents( 'php://input' );
 
-        if ( edd_get_option( 'edd_paystack_test_mode' ) ) {
-
-            $secret_key = trim( edd_get_option( 'edd_paystack_test_secret_key' ) );
-
+        if ( edd_get_option( 'edd_payflexi_test_mode' ) ) {
+            $secret_key = trim( edd_get_option( 'edd_payflexi_test_secret_key' ) );
         } else {
-
-            $secret_key = trim( edd_get_option( 'edd_paystack_live_secret_key' ) );
-
+            $secret_key = trim( edd_get_option( 'edd_payflexi_live_secret_key' ) );
         }
 
-        // validate event do all at once to avoid timing attack
-        if ( $_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] !== hash_hmac( 'sha512', $json, $secret_key ) ) {
+        if ($_SERVER['HTTP_X_PAYFLEXI_SIGNATURE'] !== hash_hmac('sha512', $body, $secret_key)) {
             exit;
         }
 
-        $event = json_decode( $json );
+        $event = json_decode( $body );
 
-        if ( 'charge.success' == $event->event ) {
+        ray(['Webhook Event' => $event]);
+
+        if ('transaction.approved' == $event->event && 'approved' == $event->data->status) {
 
             http_response_code( 200 );
 
-            $transaction_id = $event->data->reference;
+            $reference = $event->data->reference;
+			$initial_reference = $event->data->initial_reference;
 
-            $the_payment_id = edd_get_purchase_id_by_transaction_id( $transaction_id );
+            $the_payment_id = edd_get_purchase_id_by_transaction_id( $initial_reference);
 
             if ( $the_payment_id && get_post_status( $the_payment_id ) == 'publish' ) {
                 exit;
             }
 
-            $order_info = explode( '-', $transaction_id );
+            $order_info = explode( '-', $initial_reference );
 
             $payment_id = $order_info[1];
 
             $saved_txn_ref = edd_get_payment_transaction_id( $payment_id );
 
-            if ( $event->data->reference != $saved_txn_ref ) {
+            if ( $initial_reference != $saved_txn_ref ) {
                 exit;
             }
 
@@ -485,29 +505,46 @@ class EDD_Payflexi_Gateway {
 
             $currency_symbol = edd_currency_symbol( $payment->currency );
 
-            $amount_paid = $event->data->amount / 100;
+            $amount_paid  = $event->data->txn_amount ? $event->data->txn_amount : 0;
 
-            $paystack_txn_ref = $event->data->reference;
+            $payflexi_txn_ref = $event->data->reference;
 
             if ( $amount_paid < $order_total ) {
-
-                $note = 'Look into this purchase. This order is currently revoked. Reason: Amount paid is less than the total order amount. Amount Paid was ' . $currency_symbol . $amount_paid . ' while the total order amount is ' . $currency_symbol . $order_total . '. Paystack Transaction Reference: ' . $paystack_txn_ref;
-
-                $payment->status = 'revoked';
-
-                $payment->add_note( $note );
-
-                $payment->transaction_id = $paystack_txn_ref;
-
+                if($reference === $initial_reference){
+                    update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
+                    update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $amount_paid);
+                    $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
+                    $payment->status = 'partial_payment';
+                    $payment->add_note( $note );
+                    $payment->transaction_id = $payflexi_txn_ref;
+                }
+                if($reference !== $initial_reference){
+                    $installment_amount_paid = get_post_meta($payment_id, '_edd_payflexi_installment_amount_paid', true);
+                    $total_installment_amount_paid = $installment_amount_paid + $amount_paid;
+                    update_post_meta($payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid, '', 'donation');
+                    if($total_installment_amount_paid >= $order_total){
+                        $note = 'Payment transaction was successful. Payflexi Transaction Reference: ' . $payflexi_txn_ref;
+                        $payment->status = 'publish';
+                        $payment->add_note( $note );
+                        $payment->transaction_id = $payflexi_txn_ref;
+                    }else{
+                        update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref, true );
+                        update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid);
+                        $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
+                        $payment->status = 'partial_payment';
+                        $payment->add_note( $note );
+                        $payment->transaction_id = $payflexi_txn_ref;
+                    }
+                }
             } else {
 
-                $note = 'Payment transaction was successful. Paystack Transaction Reference: ' . $paystack_txn_ref;
+                $note = 'Payment transaction was successful. PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
 
                 $payment->status = 'publish';
 
                 $payment->add_note( $note );
 
-                $payment->transaction_id = $paystack_txn_ref;
+                $payment->transaction_id = $payflexi_txn_ref;
 
             }
 
@@ -556,9 +593,9 @@ class EDD_Payflexi_Gateway {
 	 * @return array
 	 */
     public function add_new_edd_payment_status( $payment_statuses ) {
-    
-        $payment_statuses['partial']   = 'Partially Paid';
-    
+
+        $payment_statuses['partial_payment']   = 'Partially Paid';
+
         return $payment_statuses;   
     }
 
@@ -574,13 +611,68 @@ class EDD_Payflexi_Gateway {
         
         $new_bulk_status_actions[ $key ] = $action;
             // Add our actions after the "Set To Cancelled" action
-            if ( 'set-status-cancelled' === $key ) {
-                $new_bulk_status_actions['set-status-partial']         = 'Set To Partially Paid';
+            if ('set-status-cancelled' === $key ) {
+                $new_bulk_status_actions['set-status-partial-payment'] = 'Set To Partially Paid';
             }
         }
-        
         return $new_bulk_status_actions;
     }
+
+    /**
+    * Adds bulk actions to update orders when performed
+    */
+    public function payflexi_edd_bulk_status_action( $id, $action ) {
+        ray($id);
+        if ('set-status-partial-payment' === $action ) {
+            edd_update_payment_status( $id, 'partial_payment' );
+        }
+        
+    }
+
+    /**
+    * Adds our custom statuses to earnings and sales reports
+    */
+    public function payflexi_edd_earnings_reporting_args( $args ) {
+
+        $args['post_status'] = array_merge( $args['post_status'], array('partial_payment') );
+    
+        return $args;
+    }
+
+    
+    public function payflexi_edd_sales_reporting_args( $args ) {
+    
+        $args['post_status'] = array_merge($args['post_status'], array('partial_payment') );
+    
+        return $args;
+    }
+
+    /**
+    * Registers our new statuses as post statuses so we can use them in Payment History navigation
+    */
+    public function payflexi_register_post_type_statuses() {
+
+        //Payment Statuses
+        register_post_status('partial_payment', array(
+            'label'                     => _x( 'Partially Paid', 'Partially paid payment status' ),
+            'public'                    => true,
+            'exclude_from_search'       => false,
+            'show_in_admin_all_list'    => true,
+            'show_in_admin_status_list' => true,
+            'label_count'               => _n_noop( 'Partially Paid <span class="count">(%s)</span>', 'Partially Paid <span class="count">(%s)</span>')
+        ));
+ 
+    }
+    /**
+    * Adds our new payment statuses to the Payment History navigation
+    */
+    public function payflexi_edd_payments_new_views( $views ) {
+    
+        $views['partial_payment']  = sprintf('<a href="%s">%s</>', add_query_arg( array( 'status' => 'partial_payment', 'paged' => FALSE ) ), 'Partially paid' );
+    
+        return $views;
+    }
+
 
 }
 
