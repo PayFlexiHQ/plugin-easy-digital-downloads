@@ -484,6 +484,8 @@ class EDD_Payflexi_Gateway {
 
             $the_payment_id = edd_get_purchase_id_by_transaction_id( $initial_reference);
 
+            ray(['payment_id' => $the_payment_id]);
+
             if ( $the_payment_id && get_post_status( $the_payment_id ) == 'publish' ) {
                 exit;
             }
@@ -503,6 +505,8 @@ class EDD_Payflexi_Gateway {
             $currency_symbol = edd_currency_symbol( $payment->currency );
 
             $order_amount = get_post_meta($payment_id, '_edd_payflexi_order_amount', true);
+
+            ray(['Order Amount' => $order_amount]);
 
             $order_amount  = $order_amount ? $order_amount : $event->data->amount;
 
@@ -526,7 +530,7 @@ class EDD_Payflexi_Gateway {
                     $total_installment_amount_paid = $installment_amount_paid + $amount_paid;
                     if($total_installment_amount_paid >= $order_amount){
                         update_post_meta($payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid);
-                        $note = 'Payment transaction was successful. Payflexi Transaction Reference: ' . $payflexi_txn_ref;
+                        $note = 'The last partial payment of ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
                         $payment->status = 'publish';
                         $payment->total = $order_amount;
                         $payment->add_note( $note );
@@ -673,7 +677,7 @@ class EDD_Payflexi_Gateway {
     */
     public function payflexi_edd_payments_new_views( $views ) {
     
-        $views['partial_payment']  = sprintf('<a href="%s">%s</>', add_query_arg( array( 'status' => 'partial_payment', 'paged' => FALSE ) ), 'Partially paid' );
+        $views['partial_payment']  = sprintf('', add_query_arg( array( 'status' => 'partial_payment', 'paged' => FALSE ) ), 'Partially paid' );
     
         return $views;
     }
