@@ -1,6 +1,6 @@
 <?php
 /*
-Plugin Name: PayFlexi Installment Payment Gateway for Easy Digital Downloads
+Plugin Name: PayFlexi Instalment Payment Gateway for Easy Digital Downloads
 Plugin URL: https://developer.payflexi.co
 Description: The PayFlexi Instalment Payment for Easy Digital Downloads allows site to accept installment payments for products from their customers. Accept payments via Stripe, PayStack, Flutterwave, and more. 
 Version: 1.0.0
@@ -118,7 +118,7 @@ class EDD_Payflexi_Gateway {
         if ($this->payflexi_edd_is_setup() ) {
             $gateways['payflexi'] = array(
                 'admin_label'    => 'PayFlexi',
-                'checkout_label' => 'PayFlexi Installment Payment',
+                'checkout_label' => 'PayFlexi Instalment Payment',
             );
         }
         return $gateways;
@@ -206,7 +206,7 @@ class EDD_Payflexi_Gateway {
 
     public function payflexi_edd_get_payment_link($payflexi_data) {
 
-        $payflexi_url = 'https://api.payflexi.test/merchants/transactions';
+        $payflexi_url = 'https://api.payflexi.co/merchants/transactions';
 
         if ( edd_get_option( 'edd_payflexi_test_mode' ) ) {
             $secret_key = trim( edd_get_option( 'edd_payflexi_test_secret_key' ) );
@@ -327,21 +327,21 @@ class EDD_Payflexi_Gateway {
 	 * @return void
 	 */
     public function edd_payflexi_redirect() {
-        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' && isset($_GET['pf_cancelled']) ) {
+        if ( isset( $_GET['edd-listener'] ) && sanitize_text_field($_GET['edd-listener']) == 'payflexi' && isset($_GET['pf_cancelled']) ) {
             edd_set_error( 'payflexi_payment_cancelled', __( 'The Transaction was cancelled by the customer', 'payflexi' ) );
             edd_send_back_to_checkout( '?payment-mode=payflexi' );
         }
 
-        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' && isset($_GET['pf_declined']) ) {
+        if ( isset( $_GET['edd-listener'] ) && sanitize_text_field($_GET['edd-listener']) == 'payflexi' && isset($_GET['pf_declined']) ) {
             edd_set_error( 'payflexi_payment_declined', __( 'The Transaction was declined by the payment gateway', 'payflexi' ) );
             edd_send_back_to_checkout( '?payment-mode=payflexi' );
         }
 
-        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'payflexi' && isset($_GET['pf_approved']) ) {
+        if ( isset( $_GET['edd-listener'] ) && sanitize_text_field($_GET['edd-listener']) == 'payflexi' && isset($_GET['pf_approved']) ) {
             do_action( 'payflexi_redirect_verify' );
         }
 
-        if ( isset( $_GET['edd-listener'] ) && $_GET['edd-listener'] == 'eddpayflexi' ) {
+        if ( isset( $_GET['edd-listener'] ) && sanitize_text_field($_GET['edd-listener']) == 'eddpayflexi' ) {
             do_action( 'payflexi_process_webhook' );
         }
     }
@@ -356,7 +356,7 @@ class EDD_Payflexi_Gateway {
 
         if ( isset( $_REQUEST['reference'] ) ) {
 
-            $payment_reference = $_GET['reference'];
+            $payment_reference = sanitize_text_field($_GET['reference']);
 
             $the_payment_id = edd_get_purchase_id_by_transaction_id( $payment_reference );
 
@@ -418,7 +418,7 @@ class EDD_Payflexi_Gateway {
 	 */
     public function payflexi_verify_transaction($payment_reference) {
 
-        $payflexi_url = 'https://api.payflexi.test/merchants/transactions/' . $payment_reference;
+        $payflexi_url = 'https://api.payflexi.co/merchants/transactions/' . $payment_reference;
 
         if ( edd_get_option( 'edd_payflexi_test_mode' ) ) {
             $secret_key = trim( edd_get_option( 'edd_payflexi_test_secret_key' ) );
@@ -431,7 +431,7 @@ class EDD_Payflexi_Gateway {
         );
 
         $args = array(
-            'sslverify' => false, //Set to true on production
+            'sslverify' => true, //Set to true on production
             'headers' => $headers,
             'timeout' => 60,
         );
@@ -533,7 +533,7 @@ class EDD_Payflexi_Gateway {
                     }else{
                         update_post_meta( $payment_id, '_edd_payflexi_transaction_id', $payflexi_txn_ref);
                         update_post_meta( $payment_id, '_edd_payflexi_installment_amount_paid', $total_installment_amount_paid);
-                        $note = 'This order is currently was partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
+                        $note = 'This order is currently been partially paid with ' . $currency_symbol . $amount_paid . ' PayFlexi Transaction Reference: ' . $payflexi_txn_ref;
                         $payment->status = 'partial_payment';
                         $payment->total = $total_installment_amount_paid;
                         $payment->add_note( $note );
